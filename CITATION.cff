@@ -1,0 +1,36 @@
+cff-version: 1.2.0
+message: "If you use MethylWeave in your research, please cite the manuscript identified in preferred-citation."
+type: software
+title: "MethylWeave: project and method documentation"
+authors:
+  - family-names: Zheng
+    given-names: Tong
+  - family-names: Song
+    given-names: Jinmiao
+  - family-names: Tian
+    given-names: Shengwei
+  - family-names: Xue
+    given-names: Yazhang
+  - family-names: Yu
+    given-names: Long
+repository-code: "https://github.com/Zethonix/MethylWeave"
+keywords:
+  - nanopore sequencing
+  - DNA methylation
+  - 5-methylcytosine
+  - class imbalance
+  - contrastive learning
+preferred-citation:
+  type: unpublished
+  title: "MethylWeave: nanopore 5mC detection with scarce positive samples"
+  authors:
+    - family-names: Zheng
+      given-names: Tong
+    - family-names: Song
+      given-names: Jinmiao
+    - family-names: Tian
+      given-names: Shengwei
+    - family-names: Xue
+      given-names: Yazhang
+    - family-names: Yu
+      given-names: Long
