@@ -1,0 +1,4 @@
+workflow	input_origin	labeled	positive	unlabeled	train	val	test
+arabidopsis	synthetic	20	10	2	16	2	2
+rice	synthetic	20	10	2	16	2	2
+hg002	synthetic	20	10	0	16	2	2
