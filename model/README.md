@@ -1,37 +1,66 @@
-# Model
+# MethylWeave model
 
-MethylWeave consumes the [target-site representation](../data_processing/README.md#model-input-representation) produced by Data Processing. This guide summarizes the architecture and learning procedure in manuscript Sections 2.2–2.5 and Supplementary Tables S2–S6. It describes the reported model, without asserting that its implementation or execution interfaces have been verified.
+This directory provides the main MethylWeave model and its training and prediction interfaces. Prepare target-site features with [data_processing](../data_processing/README.md).
 
-## Architecture
+## Model architecture
 
-| Component | Operation | Output per record |
-| --- | --- | --- |
-| Sequence encoder | Combine 5-mer tokens, nucleotide identity, motif and relative position; integrate convolutions with kernel sizes 1, 3, 5 and 7 using adaptive scale weights and local refinement | 13 × 128 |
-| Target-guided sequence context | Use the motif-conditioned target-cytosine representation as an attention query over the sequence window, then gate this context into each position | 13 × 128 |
-| Signal encoder | Encode event statistics; extract raw-current features with local convolution and bidirectional gated mixing along the position axis; combine them through a gated residual connection with learnable scaling | 13 × 128 |
-| Cross-position attention | Let sequence query signal and signal query sequence, with each query accessing all positions in the other modality | 13 × 13 access per attention head |
-| Feature fusion | Integrate sequence, signal, bidirectional cross-modal contexts, and event statistics with local variations into a shared 13 × 128 representation; update both branches and concatenate them | 13 × 256 |
-| Target-site representation and classification | Form a 128-dimensional target-site representation and classify it with linear layers, batch normalization and ReLU activations | Two class outputs |
+Multiscale sequence encoding combines base and overlapping 5-mer embeddings with motif context and target-centered attention. The signal encoder integrates event statistics with base-aligned raw-current patches. Bidirectional cross-position attention connects the sequence and signal encodings. Four feature branches (sequence, signal, cross-attention and local event statistics) are concatenated and fused by an MLP. A two-layer bidirectional GRU, representation readout and classification head produce binary methylation logits.
 
-The classifier predicts methylated versus unmethylated status for the target cytosine. A separate two-layer projection head maps the target-site representation to an L2-normalized contrastive representation during training.
+Training uses two stochastic views with signal-guided sequence masking while protecting the target cytosine and its neighboring positions. A projection head supports the existing SupMin objective; EMA scaling balances SupMin and classification cross-entropy. Prediction uses the classifier without masked views or the projection head. Attribution and licenses are retained in [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt).
 
-## Joint Training
+## Requirements
 
-Each record undergoes two stochastic forward passes through the same backbone. Event-current standard deviation guides independent masking of peripheral sequence representations after encoding. The target cytosine and neighboring positions are protected, and current inputs remain identical in the two views.
+Use Python 3.11 and install the dependencies in [requirements.txt](requirements.txt) in a separate environment from data processing. Commands below run from the repository root.
 
-MethylWeave adopts the existing **supervised minority contrastive learning (SupMin)** strategy of Mildenberger et al., [*A Tale of Two Classes: Adapting Supervised Contrastive Learning to Binary Imbalanced Datasets*, CVPR 2025](https://openaccess.thecvf.com/content/CVPR2025/html/Mildenberger_A_Tale_of_Two_Classes_Adapting_Supervised_Contrastive_Learning_to_CVPR_2025_paper.html).
+```bash
+python -m pip install -r model/requirements.txt
+```
 
-| Anchor class | Contrastive positives |
-| --- | --- |
-| Methylated minority | Its paired view and both views of every other methylated record in the batch |
-| Unmethylated majority | Its own paired view only |
+The package pins PyTorch 2.4.1. For GPU training, choose its build for your CUDA drivers using the [official PyTorch instructions](https://pytorch.org/get-started/previous-versions/). The data-processing shell workflows require Linux; model caching supports Linux and Windows.
 
-The contrastive denominator includes every batch view except the anchor. Cross-entropy is averaged over the two classification predictions. Each loss is normalized using an exponential moving average as its reference scale, and the two normalized objectives are jointly optimized with a relative weighting coefficient. The reported procedure uses joint training, without a separate contrastive-pretraining and classification-fine-tuning sequence.
+## Input format
 
-Optimizer settings, batch size, replication and checkpoint selection are recorded in [Reproducibility](../docs/reproducibility.md#training-and-model-selection).
+Use the headerless, 13-column feature TSV produced by `data_processing/`. Plain TSV and gzip-compressed TSV are supported. Columns, in order:
 
-## Inference
+```text
+contig  position  strand  position_copy  read_id  t
+sequence_13mer  mean  std  dwell  samples  label  context
+```
 
-The manuscript reports a single forward pass to obtain a methylation probability for each target-site record. The classification output is used for prediction; the contrastive representation supplies the training constraint. No on-disk prediction schema or inference command is specified here.
+The sequence has 13 target-relative positions. The loader pads it with two Cs on each end to obtain 13 overlapping 5-mer tokens. Each event column contains 13 comma-separated values; the sample column contains 13 semicolon-separated groups of 16 comma-separated current values. Dwell values undergo log1p transformation and per-record standardization. The loader uses the supplied context. Inputs must already be in target-strand orientation with normalized current; the loader does not perform alignment or repeat signal normalization.
 
-The [evaluation protocol](../docs/reproducibility.md#metrics-and-replication) defines fixed-threshold classification metrics. Its [low-FPR analyses](../docs/reproducibility.md#low-fpr-and-candidate-budget-evaluation) select retrospective operating points using test labels; those thresholds are not established deployment settings for new data.
+Training and validation labels are 0 (unmethylated) or 1 (methylated). Prediction also accepts -1 for an unlabeled record. Training and validation must use distinct files.
+
+## Training
+
+Use [config.yaml](config.yaml) for the model architecture and training defaults. The default GPU configuration uses two visible GPUs; pass `--devices 1` for a single GPU.
+
+```bash
+python model/train.py \
+  --train data/train_811.tsv --val data/val_811.tsv \
+  --out runs/methylweave
+```
+
+Training uses AdamW with cosine learning-rate decay. Validation AUPRC selects the best checkpoint and controls early stopping. Model initialization, masking and training-data shuffling are stochastic.
+
+For a small CPU run:
+
+```bash
+python model/train.py \
+  --train data/train_811.tsv --val data/val_811.tsv \
+  --out runs/methylweave_cpu --cpu --epochs 1 --batch-size 8 --workers 0
+```
+
+Choose a fresh output directory and a batch size that does not produce a one-record training batch. The first run builds a disk-backed feature cache, approximately 1 KB per record. Use `--cache-dir` to share a cache across runs with unchanged input files. The best checkpoint path is printed when training finishes; checkpoints, caches and logs remain local outputs.
+
+## Prediction
+
+Use a checkpoint produced by `train.py`. The following path selects the last training checkpoint; use the printed best checkpoint path when preferred.
+
+```bash
+python model/predict.py --checkpoint runs/methylweave/last.ckpt \
+  --input data/test_811.tsv --output predictions.tsv \
+  --device cpu --threshold 0.5
+```
+
+Prediction preserves input order and writes the one-based input row, contig, position, strand, read ID, context, supplied label, 5mC probability and binary call. A record is called methylated when its class-1 probability meets the threshold. The output file must not already exist. Use `--device cuda:0` for GPU prediction.

@@ -63,3 +63,30 @@ wandb/
 # Local documentation preparation files
 .scaffold_work/
 MethylWeave_Scaffold_Audit_Report.md
+
+# Runtime outputs at any project depth
+runs/
+outputs/
+results/
+checkpoints/
+logs/
+metrics/
+lightning_logs/
+feature-cache/
+cache/
+.cache/
+predictions/
+predictions*.tsv
+predictions*.tsv.gz
+predictions*.csv
+predictions*.csv.gz
+*.npy
+*.npz
+synthetic_run/
+
+# Generated feature, metric and prediction tables
+*.tsv
+*.tsv.gz
+*.csv
+*.csv.gz
+!data_processing/examples/expected_summary.tsv

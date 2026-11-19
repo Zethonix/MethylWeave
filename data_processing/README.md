@@ -4,9 +4,9 @@ This directory builds labeled Nanopore target-site tables from reference methyla
 
 | Dataset | Reference | Signal cohort |
 |---|---|---|
-| *Arabidopsis thaliana* | TAIR10.1 (GCF_000001735.4) | R9.4, 20,000 selected read IDs |
-| *Oryza sativa* | IRGSP-1.0 | R9.4, 20,000 selected read IDs |
-| HG002 | GRCh38 (GCF_000001405.26) | R10.4.1, 200,000 reads selected by raw signal length from the 240,000-read candidate POD5 pool |
+| *Arabidopsis thaliana* | TAIR10.1 (GCF_000001735.4) | R9.4 |
+| *Oryza sativa* | IRGSP-1.0 | R9.4 |
+| HG002 | GRCh38 (GCF_000001405.26) | R10.4.1 |
 
 ## Installation
 
@@ -90,11 +90,11 @@ Each headerless row has 13 tab-separated fields:
 contig  position  strand  position_copy  read_id  t  sequence_13mer  mean  std  dwell  samples  label  context
 ```
 
-The mean, standard deviation and dwell vectors form a `[13,3]` input. The current vector contains 13 semicolon-separated blocks of 16 comma-separated values. Labels are 0 or 1 in the benchmark; unlabeled plant rows use −1. For 5-mer tokenization, the model input loader pads the stored 13-mer with two synthetic C bases on both ends to obtain 13 overlapping tokens.
+The mean, standard deviation and dwell vectors form a `[13,3]` input. The current vector contains 13 semicolon-separated blocks of 16 comma-separated values. Labeled rows use 0 or 1; unlabeled plant rows use −1. For 5-mer tokenization, the model input loader pads the stored 13-mer with two synthetic C bases on both ends to obtain 13 overlapping tokens.
 
-Run the fixed-seed splitter on the labeled feature gzip for each dataset. It shuffles **records** with seed 42, then partitions them into `train_811.tsv`, `val_811.tsv`, and `test_811.tsv` at an approximate 8:1:1 ratio. It does not group by site or read.
+Run the deterministic splitter on the labeled feature gzip for each dataset. It shuffles **records**, then partitions them into `train_811.tsv`, `val_811.tsv`, and `test_811.tsv` at an approximate 8:1:1 ratio. It does not group by site or read.
 
-The splitter holds all eligible decompressed rows in memory to preserve the shuffle. Budget RAM above the uncompressed TSV size (about 23 GiB for Arabidopsis, 58 GiB for rice, and 3.2 GiB for HG002, before Python and allocator overhead). Do not split chunks independently.
+The splitter holds all eligible decompressed rows in memory to preserve the shuffle. Budget RAM above the uncompressed TSV size to allow for Python and allocator overhead. Do not split chunks independently.
 
 ```bash
 python3 dataset/split_811.py arab_features/labeled.tsv.gz arab_split
