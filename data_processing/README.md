@@ -1,74 +1,114 @@
-# Data Processing
+# MethylWeave data processing
 
-This guide follows the data flow from public sequencing resources to labeled model inputs, based on manuscript Section 2.1 and Supplementary Note 1. It records the reported method; the actual processing code, file interfaces and execution parameters remain subject to server-side verification.
+This directory builds labeled Nanopore target-site tables from reference methylation calls and event-aligned current signals. Commands below run from `data_processing/` and write to new output directories.
 
-## Sources and Reference Genomes
+| Dataset | Reference | Signal cohort |
+|---|---|---|
+| *Arabidopsis thaliana* | TAIR10.1 (GCF_000001735.4) | R9.4, 20,000 selected read IDs |
+| *Oryza sativa* | IRGSP-1.0 | R9.4, 20,000 selected read IDs |
+| HG002 | GRCh38 (GCF_000001405.26) | R10.4.1, 200,000 reads selected by raw signal length from the 240,000-read candidate POD5 pool |
 
-Plant nanopore and BS-seq data come from Ni et al. (2021), *Genome-wide detection of cytosine methylations in plant from Nanopore data using deep learning*, under [BioProject PRJNA764549](https://www.ncbi.nlm.nih.gov/bioproject/PRJNA764549) and [SRA SRP337810](https://www.ncbi.nlm.nih.gov/sra?term=SRP337810). Nanopore sequencing used R9.4; reference labels cover CpG, CHG and CHH contexts.
+## Installation
 
-Human HG002 (GM24385) uses two distinct ONT resources:
+On Linux with Bash and GNU coreutils, create the Python environment:
 
-| Role | Release | Official record |
-| --- | --- | --- |
-| R10.4.1 nanopore input | `giab_2023.05`, Zenodo v1 | *Sequencing Genome in a Bottle samples*: [DOI](https://doi.org/10.5281/zenodo.8363974), [Zenodo](https://zenodo.org/records/8363974) |
-| BS-seq CpG reference frequencies | `gm24385_mod_2021.09`, Zenodo v1; EPI2ME `gm24385-5mc` | *Matched Oxford Nanopore Technologies and Bisulfite Sequencing of the GM24385 Cell Line*: [DOI](https://doi.org/10.5281/zenodo.6372330), [Zenodo](https://zenodo.org/records/6372330) |
+```bash
+conda env create -f environment.yml
+conda activate methylweave-data
+python3 -c 'import sys, numpy; print(sys.version.split()[0], numpy.__version__)'
+```
 
-The BS-seq resource also contains nanopore data, but the manuscript identifies `giab_2023.05` as MethylWeave's human nanopore input. These releases should remain distinct in data provenance.
+The environment pins Python 3.10.19 and NumPy 2.2.6. It is sufficient for the synthetic example and for working with prepared CX and eventalign inputs. For the upstream workflows, install the following tools separately and expose them on `PATH`:
 
-| Dataset | Reported reference | Official source |
-| --- | --- | --- |
-| *Arabidopsis thaliana* | TAIR10.1 (GCF_000001735.4) | [NCBI](https://www.ncbi.nlm.nih.gov/datasets/genome/GCF_000001735.4/) |
-| *Oryza sativa* | IRGSP-1.0 | [RAP-DB](https://rapdb.dna.naro.go.jp/download/irgsp1.html) |
-| Human *Homo sapiens* HG002 | GRCh38 (GCF_000001405.26) | [NCBI](https://www.ncbi.nlm.nih.gov/datasets/genome/GCF_000001405.26/) |
+| Stage | Tool versions |
+|---|---|
+| Arabidopsis BS-seq | Cutadapt 5.2, Bismark 0.25.1 with Bowtie2 2.5.4, SAMtools 1.20, Picard 2.18.29 (Java runtime) |
+| Rice BS-seq | fastp 1.1.0, Bismark 0.25.1 with Bowtie2 2.5.5, SAMtools 1.22.1, Picard 2.18.29 (Java runtime) |
+| Signal preprocessing | f5c 1.4 and SAMtools; the alignment inputs were prepared with minimap2 2.24-r1122 and SAMtools 1.13 |
+| Basecalling, if needed | Guppy 6.5.7 for the plant cohorts; Dorado 0.5.3 for HG002 |
 
-## Reference Label Construction
+Bismark 0.25.1 also requires Perl. Check tool availability in the active shell before processing. Only the stages you run require their corresponding executables.
 
-Plant paired-end BS-seq reads were trimmed with Cutadapt, aligned with Bismark/Bowtie2, deduplicated with Picard and processed with the Bismark methylation extractor. HG002 uses the published BS-seq methylation frequencies from the resource above.
+For example, add [f5c 1.4](https://bioconda.github.io/recipes/f5c/README.html) to the active environment before signal processing:
 
-| Dataset | Contexts | Minimum coverage | Methylated | Unmethylated |
-| --- | --- | ---: | --- | --- |
-| Both plants | CpG, CHG, CHH | 5 | Frequency ≥ 0.9 | Frequency = 0 |
-| HG002 | CpG | 20 | Frequency ≥ 0.99 | Frequency ≤ 0.02 |
+```bash
+conda install --strict-channel-priority -c conda-forge -c bioconda f5c=1.4
+f5c --version
+```
 
-Sites outside these coverage and frequency criteria are excluded from the high-confidence label sets. For three *A. thaliana* BS-seq replicates, CpG methylated and unmethylated sets each use the intersection. For CHG and CHH, methylated sets use the union and unmethylated sets the intersection. The same preprocessing and confidence criteria are reported for *O. sativa*, without a separately specified rice replicate-integration rule.
+## Reference labels
 
-## Nanopore Processing
+For each Arabidopsis Col-0 replicate, pass the paired FASTQs and a prepared Bismark genome directory to the CX workflow. For rice, pool run mates by read direction before processing and pass a single paired input. The workflow uses Cutadapt 5.2 for Arabidopsis and fastp 1.1.0 for rice, followed by Bismark v0.25.1 alignment, duplicate removal, name sorting, and zero-based CX reporting.
 
-| Stage | Manuscript-reported operation |
-| --- | --- |
-| Basecalling | Guppy high-accuracy mode for plants, with `dna_r9.4.1_450bps_hac_prom.cfg`; Dorado v0.5.3 for HG002 |
-| Reference alignment | minimap2 alignment to the species-specific reference above |
-| Event alignment | f5c v1.4 maps current events to reference positions; the plant workflow explicitly includes FAST5-to-BLOW5 conversion |
-| Normalization | Median-based current normalization with 1.4826 × median absolute deviation (MAD) as the robust scale |
-| Current feature extraction | Event-current mean, standard deviation and duration, plus 16 retained current samples per position |
+```bash
+bash bsseq/prepare_plant_cx.sh arabidopsis col0_r1_R1.fastq.gz col0_r1_R2.fastq.gz TAIR10_bismark arab_r1_cx
+BISMARK_PARALLEL=40 bash bsseq/prepare_plant_cx.sh arabidopsis col0_r2_R1.fastq.gz col0_r2_R2.fastq.gz TAIR10_bismark arab_r2_cx
+bash bsseq/prepare_plant_cx.sh arabidopsis col0_r3_R1.fastq.gz col0_r3_R2.fastq.gz TAIR10_bismark arab_r3_cx
+bash bsseq/prepare_plant_cx.sh rice rice_R1.fastq.gz rice_R2.fastq.gz IRGSP_bismark rice_cx
 
-For events longer than 16 samples, random subsampling preserves the original sample order; shorter events are zero-padded. The retained samples do not imply a uniform physical sampling interval. Negative-strand sequences are reverse-complemented and corresponding signal features reordered into a common target-relative orientation.
+python3 bsseq/build_plant_labels.py arabidopsis --output-dir arab_labels \
+  --cx arab_r1_cx/target.CX_report.txt arab_r2_cx/target.CX_report.txt arab_r3_cx/target.CX_report.txt
+python3 bsseq/build_plant_labels.py rice --output-dir rice_labels --cx rice_cx/target.CX_report.txt
+```
 
-The manuscript does not fully specify HG002 intermediate-container handling, normalization scope or zero-scale behavior. This guide therefore does not establish those implementation choices.
+Plant calls require coverage of at least five. Positive sites have a methylated fraction of at least 0.9 and negative sites have a fraction of zero. For Arabidopsis, positive CG calls and all negative calls are intersected across replicates; positive CHG and CHH calls are united. Rice calls use the pooled CX report. Output files are named `{CG,CHG,CHH}.{pos,neg}.tsv` and keyed by contig, zero-based coordinate, and strand. Plant label selection follows the rules used by [plant_5mC_analysis](https://github.com/PengNi/plant_5mC_analysis).
 
-## Model Input Representation
+For HG002, supply a headerless, prefiltered CpG table with columns `chrom, start, end, methylation_percent, methylated, unmethylated, coverage, label`. The high-confidence input uses coverage ≥20, positive fraction ≥0.99 and negative fraction ≤0.02. Supply a two-column chromosome-to-RefSeq map and the matching GRCh38 FASTA. The script maps coordinates, infers the strand from the CpG sequence, and writes separate positive and negative lists.
 
-Each record describes a target cytosine within a nanopore read. Six positions on either side of the target give 13 represented positions, from −6 to +6. Two additional reference nucleotides on each side extend the sequence span to 17 nt (−8 to +8), allowing one centered 5-mer token at each represented position.
+```bash
+python3 bsseq/build_hg002_labels.py hg002_highconf.tsv chr_to_refseq.tsv GRCh38.fasta hg002_labels
+```
 
-| Component | Per-record representation |
-| --- | --- |
-| Sequence | 13 overlapping 5-mer tokens derived from the 17-nt reference span |
-| Event statistics | 13 × 3: current mean, standard deviation and duration |
-| Raw current | 13 × 16: retained normalized samples, with padding for short events |
-| Label | Binary reference methylation state of the target cytosine |
+## Signal processing and features
 
-Sequence and signal features share the same 13-position axis; the additional sequence flanks do not add signal positions. Labels are assigned by matching **chromosome, genomic coordinate and strand** to high-confidence BS-seq sites. This transfers site-level reference evidence to nanopore records, rather than measuring the methylation state of each nanopore molecule directly.
+The plant cohorts use Guppy 6.5.7 with the R9.4.1 HAC configuration, and `minimap2 -ax map-ont` against the matching reference. Supply the selected cohort BLOW5, original ordered read-ID list, basecalled FASTQ, and coordinate-sorted BAM. For HG002, use the selected POD5 cohort with Dorado 0.5.3 and `dna_r10.4.1_e8.2_400bps_hac@v4.3.0`. Supply its converted BLOW5, unsplit FASTQ and primary coordinate-sorted BAM against GRCh38. Input signal files, cohort manifests and reference labels are not bundled.
 
-These dimensions define the scientific interface consumed by the [model](../model/README.md). They do not specify file extensions, column names, token IDs, numeric class encoding or serialization.
+On local working copies, index each FASTQ with its associated BLOW5. Then run CPU event alignment and feature extraction. The plant driver uses 5,000-ID batches and writes separate labeled and unlabeled tables; HG002 uses CpG labels and writes only the labeled table.
 
-## Dataset Construction and Handoff
+```bash
+f5c index --slow5 arab_20k.blow5 arab.fastq
+f5c index --slow5 rice_20k.blow5 rice.fastq
+f5c index -t 16 --slow5 hg002_200k.blow5 hg002_unsplit.fastq
 
-For random-benchmark construction, the manuscript reports sampling 20,000 nanopore reads per plant species and 200,000 HG002 reads. A read can yield several target-site records, and multiple reads can cover the same genomic site.
+bash nanopore/run_event_features.sh arabidopsis arab_20k.blow5 arab.fastq arab.bam \
+  TAIR10.fasta arab_labels arab_features arab_20k_ids.txt
+bash nanopore/run_event_features.sh rice rice_20k.blow5 rice.fastq rice.bam \
+  IRGSP.fasta rice_labels rice_features rice_20k_ids.txt
+bash nanopore/run_event_features.sh hg002 hg002_200k.blow5 hg002_unsplit.fastq hg002_primary.bam \
+  GRCh38.fasta hg002_labels hg002_features
+```
 
-| Dataset | Labeled records | Positive records (%) |
-| --- | ---: | ---: |
-| *A. thaliana* | 15,158,210 | 1.29 |
-| *O. sativa* | 37,936,498 | 12.09 |
-| HG002 | 2,071,663 | 33.82 |
+The extractor joins labels by contig, coordinate and strand. It constructs a strand-oriented, cytosine-centered 13-mer and normalizes current using the read median and scaled median absolute deviation. At each position, it concatenates event samples, records the pre-cap sample count, and uses up to 2,000 samples to compute mean and standard deviation. It subsamples to 16 values in original order or center-pads with zeros.
 
-These are proportions in the constructed, confidence-filtered datasets, not genome-wide methylation frequencies. The study preserves the original class proportions for benchmark comparisons. Random and chromosome-held-out datasets were constructed separately; [Reproducibility](../docs/reproducibility.md#dataset-partitions) contains the split rules, chromosome assignments and complete partition statistics.
+The Python extractors also accept prepared eventalign TSV on standard input. The header provides `contig`, `position`, `reference_kmer`, `read_name`, `event_index` and `samples`; rows for each read must be contiguous. The synthetic example below uses this interface.
+
+## Format and splits
+
+Each headerless row has 13 tab-separated fields:
+
+```text
+contig  position  strand  position_copy  read_id  t  sequence_13mer  mean  std  dwell  samples  label  context
+```
+
+The mean, standard deviation and dwell vectors form a `[13,3]` input. The current vector contains 13 semicolon-separated blocks of 16 comma-separated values. Labels are 0 or 1 in the benchmark; unlabeled plant rows use −1. For 5-mer tokenization, the model input loader pads the stored 13-mer with two synthetic C bases on both ends to obtain 13 overlapping tokens.
+
+Run the fixed-seed splitter on the labeled feature gzip for each dataset. It shuffles **records** with seed 42, then partitions them into `train_811.tsv`, `val_811.tsv`, and `test_811.tsv` at an approximate 8:1:1 ratio. It does not group by site or read.
+
+The splitter holds all eligible decompressed rows in memory to preserve the shuffle. Budget RAM above the uncompressed TSV size (about 23 GiB for Arabidopsis, 58 GiB for rice, and 3.2 GiB for HG002, before Python and allocator overhead). Do not split chunks independently.
+
+```bash
+python3 dataset/split_811.py arab_features/labeled.tsv.gz arab_split
+python3 dataset/split_811.py rice_features/labeled.tsv.gz rice_split
+python3 dataset/split_811.py hg002_features/labeled.tsv.gz hg002_split
+```
+
+## Synthetic example
+
+Run the label builders, feature extractors and splitter on generated CX, CpG and eventalign rows. No raw sequencing files or external aligners are needed.
+
+```bash
+python3 examples/run_synthetic_example.py synthetic_run
+diff -u examples/expected_summary.tsv synthetic_run/summary.tsv
+```
+
+Each workflow produces 20 labeled rows with a 16/2/2 split. The output directory contains the synthetic inputs, label lists, feature gzip files and split TSVs. This example checks the data interfaces, not raw-sequencing preprocessing.
